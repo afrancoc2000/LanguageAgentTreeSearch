@@ -8,11 +8,14 @@ from tenacity import (
 )
 import openai
 
+import os
+import dotenv
+
 MessageRole = Literal["system", "user", "assistant"]
 
 
 @dataclasses.dataclass()
-class Message():
+class Message:
     role: MessageRole
     content: str
 
@@ -27,12 +30,12 @@ def messages_to_str(messages: List[Message]) -> str:
 
 @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(6))
 def gpt_completion(
-        model: str,
-        prompt: str,
-        max_tokens: int = 1024,
-        stop_strs: Optional[List[str]] = None,
-        temperature: float = 0.0,
-        num_comps=1,
+    model: str,
+    prompt: str,
+    max_tokens: int = 1024,
+    stop_strs: Optional[List[str]] = None,
+    temperature: float = 0.0,
+    num_comps=1,
 ) -> Union[List[str], str]:
     response = openai.Completion.create(
         model=model,
@@ -75,18 +78,66 @@ def gpt_chat(
     return [choice.message.content for choice in response.choices]  # type: ignore
 
 
-class ModelBase():
+@retry(wait=wait_random_exponential(min=1, max=180), stop=stop_after_attempt(6))
+def az_gpt_chat(
+    model: str,
+    messages: List[Message],
+    max_tokens: int = 1024,
+    temperature: float = 0.0,
+    num_comps=1,
+) -> Union[List[str], str]:
+
+    dotenv.load_dotenv()
+    api_key=os.environ["OPENAI_API_KEY"]
+    azure_endpoint=os.environ["OPENAI_BASE_URL"]
+    print(azure_endpoint + '-' + api_key)
+
+    client = openai.AzureOpenAI(
+        api_version="2023-07-01-preview",
+        api_key=api_key,
+        azure_endpoint=azure_endpoint,
+    )
+    response = client.chat.completions.create(
+        model=model,
+        messages=[dataclasses.asdict(message) for message in messages],
+        max_tokens=max_tokens,
+        temperature=temperature,
+        top_p=1,
+        frequency_penalty=0.0,
+        presence_penalty=0.0,
+        n=num_comps,
+    )
+    if num_comps == 1:
+        return response.choices[0].message.content  # type: ignore
+    print("temp", temperature)
+    return [choice.message.content for choice in response.choices]  # type: ignore
+
+
+class ModelBase:
     def __init__(self, name: str):
         self.name = name
         self.is_chat = False
 
     def __repr__(self) -> str:
-        return f'{self.name}'
+        return f"{self.name}"
 
-    def generate_chat(self, messages: List[Message], max_tokens: int = 1024, temperature: float = 0.2, num_comps: int = 1) -> Union[List[str], str]:
+    def generate_chat(
+        self,
+        messages: List[Message],
+        max_tokens: int = 1024,
+        temperature: float = 0.2,
+        num_comps: int = 1,
+    ) -> Union[List[str], str]:
         raise NotImplementedError
 
-    def generate(self, prompt: str, max_tokens: int = 1024, stop_strs: Optional[List[str]] = None, temperature: float = 0.0, num_comps=1) -> Union[List[str], str]:
+    def generate(
+        self,
+        prompt: str,
+        max_tokens: int = 1024,
+        stop_strs: Optional[List[str]] = None,
+        temperature: float = 0.0,
+        num_comps=1,
+    ) -> Union[List[str], str]:
         raise NotImplementedError
 
 
@@ -95,7 +146,13 @@ class GPTChat(ModelBase):
         self.name = model_name
         self.is_chat = True
 
-    def generate_chat(self, messages: List[Message], max_tokens: int = 1024, temperature: float = 0.2, num_comps: int = 1) -> Union[List[str], str]:
+    def generate_chat(
+        self,
+        messages: List[Message],
+        max_tokens: int = 1024,
+        temperature: float = 0.2,
+        num_comps: int = 1,
+    ) -> Union[List[str], str]:
         return gpt_chat(self.name, messages, max_tokens, temperature, num_comps)
 
 
@@ -109,12 +166,36 @@ class GPT35(GPTChat):
         super().__init__("gpt-3.5-turbo")
 
 
+class AzureGPTChat(ModelBase):
+    def __init__(self, model_name: str):
+        self.name = model_name
+        self.is_chat = True
+
+    def generate_chat(
+        self,
+        messages: List[Message],
+        max_tokens: int = 1024,
+        temperature: float = 0.2,
+        num_comps: int = 1,
+    ) -> Union[List[str], str]:
+        return az_gpt_chat(self.name.replace("az-", ""), messages, max_tokens, temperature, num_comps)
+
+
 class GPTDavinci(ModelBase):
     def __init__(self, model_name: str):
         self.name = model_name
 
-    def generate(self, prompt: str, max_tokens: int = 1024, stop_strs: Optional[List[str]] = None, temperature: float = 0, num_comps=1) -> Union[List[str], str]:
-        return gpt_completion(self.name, prompt, max_tokens, stop_strs, temperature, num_comps)
+    def generate(
+        self,
+        prompt: str,
+        max_tokens: int = 1024,
+        stop_strs: Optional[List[str]] = None,
+        temperature: float = 0,
+        num_comps=1,
+    ) -> Union[List[str], str]:
+        return gpt_completion(
+            self.name, prompt, max_tokens, stop_strs, temperature, num_comps
+        )
 
 
 class HFModelBase(ModelBase):
@@ -126,10 +207,18 @@ class HFModelBase(ModelBase):
         self.name = model_name
         self.model = model
         self.tokenizer = tokenizer
-        self.eos_token_id = eos_token_id if eos_token_id is not None else self.tokenizer.eos_token_id
+        self.eos_token_id = (
+            eos_token_id if eos_token_id is not None else self.tokenizer.eos_token_id
+        )
         self.is_chat = True
 
-    def generate_chat(self, messages: List[Message], max_tokens: int = 1024, temperature: float = 0.2, num_comps: int = 1) -> Union[List[str], str]:
+    def generate_chat(
+        self,
+        messages: List[Message],
+        max_tokens: int = 1024,
+        temperature: float = 0.2,
+        num_comps: int = 1,
+    ) -> Union[List[str], str]:
         # NOTE: HF does not like temp of 0.0.
         if temperature < 0.0001:
             temperature = 0.0001
@@ -138,8 +227,7 @@ class HFModelBase(ModelBase):
 
         outputs = self.model.generate(
             prompt,
-            max_new_tokens=min(
-                max_tokens, self.model.config.max_position_embeddings),
+            max_new_tokens=min(max_tokens, self.model.config.max_position_embeddings),
             use_cache=True,
             do_sample=True,
             temperature=temperature,
@@ -170,6 +258,7 @@ class StarChat(HFModelBase):
     def __init__(self):
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
+
         model = AutoModelForCausalLM.from_pretrained(
             "HuggingFaceH4/starchat-beta",
             torch_dtype=torch.bfloat16,
@@ -192,7 +281,7 @@ class StarChat(HFModelBase):
     def extract_output(self, output: str) -> str:
         out = output.split("<|assistant|>")[1]
         if out.endswith("<|end|>"):
-            out = out[:-len("<|end|>")]
+            out = out[: -len("<|end|>")]
 
         return out
 
@@ -209,11 +298,12 @@ If a question does not make any sense, or is not factually coherent, explain why
     def __init__(self, version: Literal["34b", "13b", "7b"] = "34b"):
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
+
         tokenizer = AutoTokenizer.from_pretrained(
             f"codellama/CodeLlama-{version}-Instruct-hf",
             add_eos_token=True,
             add_bos_token=True,
-            padding_side='left'
+            padding_side="left",
         )
         model = AutoModelForCausalLM.from_pretrained(
             f"codellama/CodeLlama-{version}-Instruct-hf",
@@ -228,8 +318,13 @@ If a question does not make any sense, or is not factually coherent, explain why
                 Message(role="system", content=self.DEFAULT_SYSTEM_PROMPT)
             ] + messages
         messages = [
-            Message(role=messages[1].role, content=self.B_SYS +
-                    messages[0].content + self.E_SYS + messages[1].content)
+            Message(
+                role=messages[1].role,
+                content=self.B_SYS
+                + messages[0].content
+                + self.E_SYS
+                + messages[1].content,
+            )
         ] + messages[2:]
         assert all([msg.role == "user" for msg in messages[::2]]) and all(
             [msg.role == "assistant" for msg in messages[1::2]]
@@ -249,13 +344,16 @@ If a question does not make any sense, or is not factually coherent, explain why
             ],
             [],
         )
-        assert messages[-1].role == "user", f"Last message must be from user, got {messages[-1].role}"
+        assert (
+            messages[-1].role == "user"
+        ), f"Last message must be from user, got {messages[-1].role}"
         messages_tokens += self.tokenizer.encode(
             f"{self.B_INST} {(messages[-1].content).strip()} {self.E_INST}",
         )
         # remove eos token from last message
         messages_tokens = messages_tokens[:-1]
         import torch
+
         return torch.tensor([messages_tokens]).to(self.model.device)
 
     def extract_output(self, output: str) -> str:
