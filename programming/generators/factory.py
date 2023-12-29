@@ -2,7 +2,7 @@ from .py_generate import PyGenerator
 from .rs_generate import RsGenerator
 from .go_generate import GoGenerator
 from .generator_types import Generator
-from .model import CodeLlama, ModelBase, GPT4, GPT35, StarChat, GPTDavinci
+from .model import CodeLlama, ModelBase, GPT4, GPT35, StarChat, GPTDavinci, AzureGPTChat
 
 
 def generator_factory(lang: str) -> Generator:
@@ -31,5 +31,7 @@ def model_factory(model_name: str) -> ModelBase:
         return CodeLlama(**kwargs)
     elif model_name.startswith("text-davinci"):
         return GPTDavinci(model_name)
+    elif model_name.startswith("az-"):
+        return AzureGPTChat(model_name)
     else:
         raise ValueError(f"Invalid model name: {model_name}")
