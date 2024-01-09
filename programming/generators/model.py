@@ -88,12 +88,12 @@ def az_gpt_chat(
 ) -> Union[List[str], str]:
 
     dotenv.load_dotenv()
-    api_key=os.environ["OPENAI_API_KEY"]
-    azure_endpoint=os.environ["OPENAI_BASE_URL"]
-    print(azure_endpoint + '-' + api_key)
+    api_key=os.getenv("OPENAI_API_KEY")
+    azure_endpoint=os.getenv("OPENAI_BASE_URL")
+    api_version=os.getenv("OPENAI_API_VERSION")
 
     client = openai.AzureOpenAI(
-        api_version="2023-07-01-preview",
+        api_version=api_version,
         api_key=api_key,
         azure_endpoint=azure_endpoint,
     )
